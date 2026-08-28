@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Node / React
+node_modules/
+dist/
+build/
+.vite/
+*.local
+
+# Env & secrets
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Data (generated synthetic datasets can be large — regenerate instead of committing)
+backend/data/*.csv
+backend/data/*.json
+!backend/data/.gitkeep
+
+# Logs
+*.log
