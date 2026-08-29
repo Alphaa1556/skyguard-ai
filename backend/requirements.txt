@@ -6,3 +6,5 @@ pandas
 scikit-learn
 shap
 python-multipart
+matplotlib
+requests
