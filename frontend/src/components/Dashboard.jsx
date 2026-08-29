@@ -22,7 +22,27 @@ function Badge({ health }) {
   )
 }
 
+// Fixed padding per metric keeps the Y-axis stable across polls instead of
+// auto-rescaling on every tiny jitter in the mock data (or real sensor noise).
+const METRIC_DOMAIN = {
+  temperature_c: { pad: 2, min: undefined, max: undefined },
+  pressure_hpa: { pad: 3, min: undefined, max: undefined },
+  humidity_pct: { pad: 6, min: 0, max: 100 },
+}
+
+function getDomain(data, dataKey) {
+  const cfg = METRIC_DOMAIN[dataKey] || { pad: 2 }
+  const values = data.map(d => d[dataKey]).filter(v => typeof v === 'number')
+  if (!values.length) return ['auto', 'auto']
+  let lo = Math.floor(Math.min(...values) - cfg.pad)
+  let hi = Math.ceil(Math.max(...values) + cfg.pad)
+  if (cfg.min !== undefined) lo = Math.max(lo, cfg.min)
+  if (cfg.max !== undefined) hi = Math.min(hi, cfg.max)
+  return [lo, hi]
+}
+
 function MetricChart({ data, dataKey, label, unit, color }) {
+  const domain = useMemo(() => getDomain(data, dataKey), [data, dataKey])
   return (
     <div className="metric-chart">
       <div className="metric-chart-head">
@@ -36,7 +56,7 @@ function MetricChart({ data, dataKey, label, unit, color }) {
         <LineChart data={data} margin={{ top: 6, right: 4, left: -20, bottom: 0 }}>
           <CartesianGrid stroke="var(--border)" vertical={false} />
           <XAxis dataKey="time" tick={{ fill: 'var(--text-faint)', fontSize: 10 }} axisLine={false} tickLine={false} interval={7} />
-          <YAxis tick={{ fill: 'var(--text-faint)', fontSize: 10 }} axisLine={false} tickLine={false} width={34} />
+          <YAxis domain={domain} tick={{ fill: 'var(--text-faint)', fontSize: 10 }} axisLine={false} tickLine={false} width={34} />
           <Tooltip
             contentStyle={{ background: 'var(--bg-elevated)', border: '1px solid var(--border-strong)', borderRadius: 8, fontSize: 12 }}
             labelStyle={{ color: 'var(--text-muted)' }}
@@ -48,6 +68,20 @@ function MetricChart({ data, dataKey, label, unit, color }) {
   )
 }
 
+// "Updated Xs ago" — ticks every second off a fetchedAt timestamp stamped
+// onto each station's status when it's polled.
+function LastUpdated({ fetchedAt }) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [])
+  if (!fetchedAt) return null
+  const secs = Math.max(0, Math.round((now - fetchedAt) / 1000))
+  const text = secs < 1 ? 'just now' : secs === 1 ? '1s ago' : `${secs}s ago`
+  return <span className="last-updated mono">Updated {text}</span>
+}
+
 export default function Dashboard() {
   const [selectedId, setSelectedId] = useState(STATIONS[0].station_id)
   const [statuses, setStatuses] = useState({})
@@ -56,8 +90,9 @@ export default function Dashboard() {
   useEffect(() => {
     let cancelled = false
     const load = async () => {
+      const fetchedAt = Date.now()
       const entries = await Promise.all(
-        STATIONS.map(async s => [s.station_id, await fetchStationStatus(s.station_id)])
+        STATIONS.map(async s => [s.station_id, { ...(await fetchStationStatus(s.station_id)), fetchedAt }])
       )
       if (!cancelled) setStatuses(Object.fromEntries(entries))
     }
@@ -117,7 +152,10 @@ export default function Dashboard() {
                   <h3 className="detail-title">{selected.name}</h3>
                   <span className="detail-id mono">{selected.station_id}</span>
                 </div>
-                <Badge health={selected.sensor_health} />
+                <div className="detail-head-right">
+                  <Badge health={selected.sensor_health} />
+                  <LastUpdated fetchedAt={selected.fetchedAt} />
+                </div>
               </div>
 
               {selected.anomaly?.is_anomaly && (
