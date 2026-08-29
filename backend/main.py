@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -68,7 +68,9 @@ class StationSummary(BaseModel):
 
 
 # In-memory store for now — swap for a time-series DB once the pipeline is real.
+# Note: this resets every time the server restarts.
 _stations: dict[str, StationStatus] = {}
+_locations: dict[str, Location] = {}
 
 
 @app.get("/")
@@ -96,6 +98,7 @@ def ingest(payload: IngestPayload):
         sensor_health="normal",
     )
     _stations[payload.station_id] = result
+    _locations[payload.station_id] = payload.location
     return result
 
 
@@ -103,17 +106,20 @@ def ingest(payload: IngestPayload):
 def list_stations():
     return [
         StationSummary(
-            station_id=s.station_id,
-            latitude=0.0,  # TODO: persist location alongside status
-            longitude=0.0,
-            health=s.sensor_health,
+            station_id=station_id,
+            latitude=_locations[station_id].latitude,
+            longitude=_locations[station_id].longitude,
+            health=status.sensor_health,
         )
-        for s in _stations.values()
+        for station_id, status in _stations.items()
     ]
 
 
 @app.get("/stations/{station_id}/status", response_model=StationStatus)
 def station_status(station_id: str):
     if station_id not in _stations:
-        return {"error": "station not found"}
+        raise HTTPException(
+            status_code=404,
+            detail=f"Station '{station_id}' not found. Ingest a reading for it first via POST /ingest.",
+        )
     return _stations[station_id]
