@@ -36,8 +36,17 @@ Dashboard polls this (or subscribes via WebSocket).
 For the 3D map view.
 ```json
 [
-  { "station_id": "AWS-IND-MH-001", "latitude": 18.9894, "longitude": 73.1175, "health": "normal" },
-  { "station_id": "AWS-IND-KA-004", "latitude": 12.9716, "longitude": 77.5946, "health": "anomaly" }
+  {
+    "station_id": "AWS-IND-MH-001",
+    "name": "Mumbai Coastal AWS",
+    "city": "Mumbai",
+    "state": "Maharashtra",
+    "country": "India",
+    "latitude": 19.076,
+    "longitude": 72.8777,
+    "health": "normal",
+    "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=43003"
+  }
 ]
 ```
 

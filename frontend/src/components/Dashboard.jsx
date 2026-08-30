@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
 } from 'recharts'
-import { STATIONS, fetchStationStatus } from '../data/mockStations'
+import { DEFAULT_STATIONS, fetchStationStatus, fetchStations } from '../data/stations'
 import './Dashboard.css'
 
 const HEALTH_META = {
@@ -83,8 +83,22 @@ function LastUpdated({ fetchedAt }) {
 }
 
 export default function Dashboard() {
-  const [selectedId, setSelectedId] = useState(STATIONS[0].station_id)
+  const [stations, setStations] = useState(DEFAULT_STATIONS)
+  const [selectedId, setSelectedId] = useState(DEFAULT_STATIONS[0].station_id)
   const [statuses, setStatuses] = useState({})
+
+  useEffect(() => {
+    let active = true
+    fetchStations().then((items) => {
+      if (!active) return
+      setStations(items)
+      setSelectedId((current) => current || items[0]?.station_id || DEFAULT_STATIONS[0].station_id)
+    }).catch(() => {
+      if (active) setStations(DEFAULT_STATIONS)
+    })
+
+    return () => { active = false }
+  }, [])
 
   // Poll every station's /status on an interval — swap for WebSocket later if needed.
   useEffect(() => {
@@ -92,14 +106,14 @@ export default function Dashboard() {
     const load = async () => {
       const fetchedAt = Date.now()
       const entries = await Promise.all(
-        STATIONS.map(async s => [s.station_id, { ...(await fetchStationStatus(s.station_id)), fetchedAt }])
+        stations.map(async s => [s.station_id, { ...(await fetchStationStatus(s.station_id)), fetchedAt }])
       )
       if (!cancelled) setStatuses(Object.fromEntries(entries))
     }
     load()
     const interval = setInterval(load, 8000)
     return () => { cancelled = true; clearInterval(interval) }
-  }, [])
+  }, [stations])
 
   const alerts = useMemo(
     () => Object.values(statuses).filter(s => s?.anomaly?.is_anomaly),
@@ -113,7 +127,7 @@ export default function Dashboard() {
       <div className="dashboard-head">
         <div>
           <h2 className="section-title">Station network</h2>
-          <p className="section-sub">Live readings across {STATIONS.length} Automatic Weather Stations</p>
+          <p className="section-sub">Live readings across {stations.length} Automatic Weather Stations</p>
         </div>
         <div className="live-indicator mono">
           <span className="status-pip" /> LIVE · polling every 8s
@@ -122,7 +136,7 @@ export default function Dashboard() {
 
       <div className="dashboard-grid">
         <div className="station-list">
-          {STATIONS.map(s => {
+          {stations.map(s => {
             const status = statuses[s.station_id]
             const health = status?.sensor_health || s.health
             return (
@@ -136,6 +150,7 @@ export default function Dashboard() {
                   <Badge health={health} />
                 </div>
                 <span className="station-id mono">{s.station_id}</span>
+                <span className="station-location mono">{s.city}, {s.state}, {s.country || 'India'}</span>
                 {status?.anomaly?.is_anomaly && (
                   <span className="station-anomaly-type mono">{status.anomaly.type}</span>
                 )}
@@ -155,6 +170,9 @@ export default function Dashboard() {
                 <div className="detail-head-right">
                   <Badge health={selected.sensor_health} />
                   <LastUpdated fetchedAt={selected.fetchedAt} />
+                  <a href={selected.feedUrl || selected.feed_url} target="_blank" rel="noreferrer" className="detail-feed-link">
+                    Live feed
+                  </a>
                 </div>
               </div>
 
@@ -172,6 +190,12 @@ export default function Dashboard() {
                   <p className="explain-panel-text">{selected.anomaly.explanation}</p>
                 </div>
               )}
+
+              <div className="current-readings" aria-label="Current station readings">
+                <div className="current-reading"><span>Temperature</span><strong>{selected.readings?.temperature_c ?? '--'}<small> °C</small></strong></div>
+                <div className="current-reading"><span>Pressure</span><strong>{selected.readings?.pressure_hpa ?? '--'}<small> hPa</small></strong></div>
+                <div className="current-reading"><span>Humidity</span><strong>{selected.readings?.humidity_pct ?? '--'}<small> %</small></strong></div>
+              </div>
 
               <div className="metric-grid">
                 <MetricChart data={selected.series} dataKey="temperature_c" label="Temperature" unit="°C" color="var(--teal)" />
