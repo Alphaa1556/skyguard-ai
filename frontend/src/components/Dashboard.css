@@ -251,3 +251,27 @@
   .station-list { flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
   .station-card { min-width: 200px; }
 }
+
+/* Alert Center Experimental Aesthetics */
+.alert-center {
+  max-height: 720px;
+  overflow-y: auto;
+}
+
+.alert-center::-webkit-scrollbar {
+  width: 4px;
+}
+.alert-center::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(255, 87, 87, 0.7); }
+  70% { box-shadow: 0 0 0 6px rgba(255, 87, 87, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 87, 87, 0); }
+}
+
+.alert-item-dot {
+  animation: pulse-red 2s infinite;
+}
