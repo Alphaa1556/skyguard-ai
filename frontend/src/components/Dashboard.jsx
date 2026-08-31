@@ -162,6 +162,7 @@ export default function Dashboard() {
                   <SensorBadge health={health} />
                 </div>
                 <span className="station-id mono">{s.station_id}</span>
+                <span className="station-location mono">{s.city}, {s.state}, {s.country || 'India'}</span>
                 {status?.anomaly?.is_anomaly && (
                   <span className="station-anomaly-type mono">{status.anomaly.type}</span>
                 )}
@@ -181,10 +182,19 @@ export default function Dashboard() {
                 <div className="detail-head-right">
                   <SensorBadge health={selected.sensor_health || 'normal'} />
                   <LastUpdated fetchedAt={selected.fetchedAt} />
+                  <a href={selected.feedUrl || selected.feed_url} target="_blank" rel="noreferrer" className="detail-feed-link">
+                    Live feed
+                  </a>
                 </div>
               </div>
 
               <ExplainPanel anomaly={selected.anomaly} />
+
+              <div className="current-readings" aria-label="Current station readings">
+                <div className="current-reading"><span>Temperature</span><strong>{selected.readings?.temperature_c ?? '--'}<small> °C</small></strong></div>
+                <div className="current-reading"><span>Pressure</span><strong>{selected.readings?.pressure_hpa ?? '--'}<small> hPa</small></strong></div>
+                <div className="current-reading"><span>Humidity</span><strong>{selected.readings?.humidity_pct ?? '--'}<small> %</small></strong></div>
+              </div>
 
               <div className="metric-grid">
                 <MetricChart data={selected.series} dataKey="temperature_c" label="Temperature" unit="°C" color="var(--teal)" />
