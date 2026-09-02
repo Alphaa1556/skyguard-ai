@@ -75,6 +75,7 @@
 
 .station-name { font-weight: 500; font-size: 0.95rem; }
 .station-id { font-size: 10.5px; color: var(--text-faint); }
+.station-location { font-size: 9.5px; color: var(--text-faint); }
 .station-anomaly-type {
   align-self: flex-start;
   font-size: 10px;
@@ -131,6 +132,27 @@
 }
 .detail-id { color: var(--text-faint); font-size: 11px; }
 .detail-loading { color: var(--text-faint); padding: 40px 0; text-align: center; }
+
+.current-readings {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.current-reading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.current-reading span { color: var(--text-muted); font-size: 0.75rem; }
+.current-reading strong { font-family: var(--font-display); font-size: 1.2rem; }
+.current-reading small { color: var(--text-faint); font-size: 0.7rem; }
 
 .explain-panel {
   background: var(--red-dim);
@@ -250,4 +272,28 @@
   .dashboard-grid { grid-template-columns: 1fr; }
   .station-list { flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
   .station-card { min-width: 200px; }
+}
+
+/* Alert Center Experimental Aesthetics */
+.alert-center {
+  max-height: 720px;
+  overflow-y: auto;
+}
+
+.alert-center::-webkit-scrollbar {
+  width: 4px;
+}
+.alert-center::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+@keyframes pulse-red {
+  0% { box-shadow: 0 0 0 0 rgba(255, 87, 87, 0.7); }
+  70% { box-shadow: 0 0 0 6px rgba(255, 87, 87, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(255, 87, 87, 0); }
+}
+
+.alert-item-dot {
+  animation: pulse-red 2s infinite;
 }

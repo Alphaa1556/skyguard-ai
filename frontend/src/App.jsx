@@ -7,6 +7,7 @@ import './App.css'
 export default function App() {
   const dashboardRef = useRef(null)
   const [introActive, setIntroActive] = useState(true)
+  const [selectedStationId, setSelectedStationId] = useState('AWS-IND-MH-001')
 
   // Skip the boot sequence entirely for users who've asked for reduced motion.
   useEffect(() => {
@@ -24,6 +25,12 @@ export default function App() {
     dashboardRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
 
+  const handleStationSelect = (stationId) => {
+    if (!stationId) return
+    setSelectedStationId(stationId)
+    scrollToDashboard()
+  }
+
   return (
     <div className="app">
       {introActive && <SatelliteIntro onDone={() => setIntroActive(false)} />}
@@ -34,9 +41,9 @@ export default function App() {
           <span className="site-nav-tag">PS 26073 · IMD</span>
         </nav>
       </header>
-      <Hero onExplore={scrollToDashboard} />
+      <Hero onExplore={scrollToDashboard} onStationSelect={handleStationSelect} selectedStationId={selectedStationId} />
       <div ref={dashboardRef}>
-        <Dashboard />
+        <Dashboard selectedStationId={selectedStationId} onSelectStation={setSelectedStationId} />
       </div>
       <footer className="site-footer mono">
         Built for Ministry of Earth Sciences (MoES) · India Meteorological Department — disaster management

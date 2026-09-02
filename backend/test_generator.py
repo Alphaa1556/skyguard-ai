@@ -2,6 +2,13 @@ import unittest
 from datetime import datetime
 import pandas as pd
 import numpy as np
+import importlib.util
+from pathlib import Path
+
+spec = importlib.util.spec_from_file_location("skyguard_backend", Path(__file__).resolve().parent / "main.py")
+backend_main = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(backend_main)
+
 from generate_data import (
     generate_stations_data,
     inject_spike,
@@ -119,6 +126,17 @@ class TestWeatherGenerator(unittest.TestCase):
         if len(temp_vals) > 10:
             corr = np.corrcoef(temp_vals, hum_vals)[0, 1]
             self.assertLess(corr, -0.5, f"Expected negative physical correlation between T and H, got {corr}")
+
+    def test_seed_demo_data_populates_station_store(self):
+        """Ensure the API starts with a live station inventory rather than an empty mock store."""
+        backend_main._stations.clear()
+        backend_main._locations.clear()
+
+        backend_main.seed_demo_data()
+
+        stations = backend_main.list_stations()
+        self.assertGreater(len(stations), 0)
+        self.assertTrue(any(s.station_id.startswith("AWS-IND-") for s in stations))
 
 if __name__ == "__main__":
     unittest.main()

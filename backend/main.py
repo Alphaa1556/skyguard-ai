@@ -69,15 +69,69 @@ class StationStatus(BaseModel):
 
 class StationSummary(BaseModel):
     station_id: str
+    name: str
+    city: str
+    state: str
+    country: str = "India"
     latitude: float
     longitude: float
     health: str
+    feed_url: str
 
 
 # In-memory store for now — swap for a time-series DB once the pipeline is real.
 # Note: this resets every time the server restarts.
 _stations: dict[str, StationStatus] = {}
 _locations: dict[str, Location] = {}
+
+DEMO_STATIONS = [
+    {"station_id": "AWS-IND-MH-001", "name": "Mumbai Coastal AWS", "city": "Mumbai", "state": "Maharashtra", "latitude": 19.0760, "longitude": 72.8777, "health": "normal", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=43003"},
+    {"station_id": "AWS-IND-DL-011", "name": "Delhi Plains AWS", "city": "New Delhi", "state": "Delhi", "latitude": 28.6139, "longitude": 77.2090, "health": "normal", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=42182"},
+    {"station_id": "AWS-IND-KA-004", "name": "Bangalore Plateau AWS", "city": "Bengaluru", "state": "Karnataka", "latitude": 12.9716, "longitude": 77.5946, "health": "degraded", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=43295"},
+    {"station_id": "AWS-IND-TN-003", "name": "Chennai Coastal AWS", "city": "Chennai", "state": "Tamil Nadu", "latitude": 13.0827, "longitude": 80.2707, "health": "anomaly", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=43279"},
+    {"station_id": "AWS-IND-WB-007", "name": "Kolkata Delta AWS", "city": "Kolkata", "state": "West Bengal", "latitude": 22.5726, "longitude": 88.3639, "health": "normal", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=42807"},
+    {"station_id": "AWS-IND-GJ-001", "name": "Ahmedabad Semi-Arid AWS", "city": "Ahmedabad", "state": "Gujarat", "latitude": 23.0225, "longitude": 72.5714, "health": "normal", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=42647"},
+    {"station_id": "AWS-IND-UP-001", "name": "Lucknow Central AWS", "city": "Lucknow", "state": "Uttar Pradesh", "latitude": 26.8467, "longitude": 80.9462, "health": "normal", "feed_url": "https://mausam.imd.gov.in/"},
+    {"station_id": "AWS-IND-KL-001", "name": "Trivandrum Tropical AWS", "city": "Thiruvananthapuram", "state": "Kerala", "latitude": 8.5241, "longitude": 76.9366, "health": "normal", "feed_url": "https://mausam.imd.gov.in/"},
+]
+
+DEMO_READINGS = {
+    "AWS-IND-MH-001": {"temperature_c": 28.9, "pressure_hpa": 1009.2, "humidity_pct": 78.4},
+    "AWS-IND-DL-011": {"temperature_c": 32.4, "pressure_hpa": 1005.5, "humidity_pct": 46.2},
+    "AWS-IND-KA-004": {"temperature_c": 24.8, "pressure_hpa": 919.8, "humidity_pct": 68.1},
+    "AWS-IND-TN-003": {"temperature_c": 30.2, "pressure_hpa": 1011.0, "humidity_pct": 81.9},
+    "AWS-IND-WB-007": {"temperature_c": 29.4, "pressure_hpa": 1008.3, "humidity_pct": 81.3},
+    "AWS-IND-GJ-001": {"temperature_c": 31.5, "pressure_hpa": 1007.0, "humidity_pct": 49.6},
+    "AWS-IND-UP-001": {"temperature_c": 27.2, "pressure_hpa": 1006.1, "humidity_pct": 59.4},
+    "AWS-IND-KL-001": {"temperature_c": 27.1, "pressure_hpa": 1011.4, "humidity_pct": 83.5},
+}
+
+
+def seed_demo_data() -> None:
+    """Populate the in-memory station store with a realistic Indian AWS inventory."""
+    for station in DEMO_STATIONS:
+        station_id = station["station_id"]
+        if station_id in _stations:
+            continue
+
+        readings = Readings(**DEMO_READINGS[station_id])
+        anomaly = _detect_anomaly(readings)
+        _stations[station_id] = StationStatus(
+            station_id=station_id,
+            timestamp=datetime.now(timezone.utc),
+            readings=readings,
+            anomaly=anomaly,
+            sensor_health=station["health"],
+        )
+        _locations[station_id] = Location(
+            latitude=station["latitude"],
+            longitude=station["longitude"],
+        )
+
+
+@app.on_event("startup")
+def startup_event() -> None:
+    seed_demo_data()
 
 
 # ---------------------------------------------------------------------------
@@ -216,9 +270,13 @@ def list_stations():
     return [
         StationSummary(
             station_id=station_id,
+            name=next((item["name"] for item in DEMO_STATIONS if item["station_id"] == station_id), station_id),
+            city=next((item["city"] for item in DEMO_STATIONS if item["station_id"] == station_id), station_id),
+            state=next((item["state"] for item in DEMO_STATIONS if item["station_id"] == station_id), "India"),
             latitude=_locations[station_id].latitude,
             longitude=_locations[station_id].longitude,
             health=status.sensor_health,
+            feed_url=next((item["feed_url"] for item in DEMO_STATIONS if item["station_id"] == station_id), "https://mausam.imd.gov.in/"),
         )
         for station_id, status in _stations.items()
     ]
