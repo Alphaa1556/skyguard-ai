@@ -23,6 +23,33 @@ const WORLD_LABELS = [
   { label: 'Australia', lat: -25, lng: 133 },
 ]
 
+function hexToRgba(hex, alpha) {
+  const value = hex.replace('#', '')
+  const full = value.length === 3 ? value.split('').map((char) => char + char).join('') : value
+  const int = Number.parseInt(full, 16)
+  const r = (int >> 16) & 255
+  const g = (int >> 8) & 255
+  const b = int & 255
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+function buildStationPinSvg(color, isSelected) {
+  const pinFill = color || '#16e0b4'
+  const dotFill = '#0b0f17'
+  const outerSize = isSelected ? 130 : 110
+  const innerRadius = isSelected ? 18 : 15
+  const stroke = isSelected ? '#f8fbff' : '#000000'
+
+  return `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${outerSize}" height="${outerSize}" viewBox="0 0 120 120" aria-hidden="true">
+      <g>
+        <path d="M60 10c-24.9 0-45 20.1-45 45 0 31.4 36 57 43.2 63.1a4.7 4.7 0 0 0 3.6 0C69 112 105 86.4 105 55 105 30.1 84.9 10 60 10Z" fill="${pinFill}" stroke="${stroke}" stroke-width="7" stroke-linejoin="round"/>
+        <circle cx="60" cy="55" r="${innerRadius}" fill="${dotFill}" stroke="${stroke}" stroke-width="6"/>
+      </g>
+    </svg>
+  `
+}
+
 function buildWavePath(spike) {
   const w = 900
   const h = 140
@@ -41,13 +68,14 @@ function buildWavePath(spike) {
   return 'M ' + points.map(p => p.join(',')).join(' L ')
 }
 
-export default function Hero({ onExplore }) {
+export default function Hero({ onExplore, onStationSelect, selectedStationId: controlledSelectedStationId }) {
   const globeRef = useRef(null)
   const [phase, setPhase] = useState('calm')
   const [path, setPath] = useState(buildWavePath(false))
   const [stations, setStations] = useState(DEFAULT_STATIONS)
-  const [selectedStationId, setSelectedStationId] = useState(DEFAULT_STATIONS[0].station_id)
+  const [selectedStationId, setSelectedStationId] = useState(controlledSelectedStationId || DEFAULT_STATIONS[0].station_id)
   const [worldPolygons, setWorldPolygons] = useState([])
+  const [pulseTick, setPulseTick] = useState(0)
 
   useEffect(() => {
     let active = true
@@ -110,6 +138,17 @@ export default function Hero({ onExplore }) {
     globe.pointOfView({ lat: 20, lng: 78, altitude: 1.8 }, 0)
   }, [])
 
+  useEffect(() => {
+    if (controlledSelectedStationId) {
+      setSelectedStationId(controlledSelectedStationId)
+    }
+  }, [controlledSelectedStationId])
+
+  useEffect(() => {
+    const id = setInterval(() => setPulseTick((current) => (current + 1) % 1000), 1200)
+    return () => clearInterval(id)
+  }, [])
+
   const selectedStation = useMemo(
     () => stations.find((station) => station.station_id === selectedStationId) ?? stations[0] ?? DEFAULT_STATIONS[0],
     [selectedStationId, stations]
@@ -117,25 +156,61 @@ export default function Hero({ onExplore }) {
 
   const stationPoints = useMemo(
     () =>
-      stations.map((station) => ({
-        ...station,
-        lat: station.latitude,
-        lng: station.longitude,
-        color: station.health === 'anomaly' ? '#ff4d5e' : station.health === 'degraded' ? '#ffb020' : '#16e0b4',
-      })),
+      stations.map((station) => {
+        const statusColor = station.color || station.statusColor || (station.health === 'anomaly' ? '#ff4d5e' : station.health === 'degraded' ? '#ffb020' : '#16e0b4')
+
+        return {
+          ...station,
+          lat: station.latitude,
+          lng: station.longitude,
+          color: statusColor,
+          glowColor: statusColor,
+        }
+      }),
     [stations]
   )
 
   const labelPoints = useMemo(
     () => [
       ...WORLD_LABELS,
-      ...stations.map((station) => ({
-        label: `${station.city} · ${station.state}`,
+      ...stations
+        .filter((station) => station.latitude != null && station.longitude != null)
+        .map((station) => ({
+          label: station.city,
+          lat: station.latitude,
+          lng: station.longitude,
+          color: '#ffb020',
+        })),
+    ],
+    [stations]
+  )
+
+  const selectedHaloPoints = useMemo(() => {
+    if (!selectedStation) return []
+    const color = selectedStation.color || (selectedStation.health === 'anomaly' ? '#ff4d5e' : selectedStation.health === 'degraded' ? '#ffb020' : '#16e0b4')
+    const pulse = 0.8 + ((pulseTick % 4) / 10)
+    return [{
+      station_id: `${selectedStation.station_id}-halo`,
+      lat: selectedStation.latitude,
+      lng: selectedStation.longitude,
+      color,
+      isHalo: true,
+      pulse,
+      health: selectedStation.health,
+      name: selectedStation.name,
+    }]
+  }, [pulseTick, selectedStation])
+
+  const globePointsData = useMemo(() => [...stationPoints, ...selectedHaloPoints], [selectedHaloPoints, stationPoints])
+
+  const htmlPins = useMemo(
+    () =>
+      stations.map((station) => ({
+        ...station,
         lat: station.latitude,
         lng: station.longitude,
-        color: '#ffb020',
+        color: station.color || (station.health === 'anomaly' ? '#ff4d5e' : station.health === 'degraded' ? '#ffb020' : '#16e0b4'),
       })),
-    ],
     [stations]
   )
 
@@ -224,13 +299,49 @@ export default function Hero({ onExplore }) {
             labelSize={(d) => (d.label.includes('·') ? 0.9 : 0.7)}
             labelColor={(d) => (d.label.includes('·') ? '#ffb020' : '#dfe8ff')}
             labelDotRadius={0.18}
-            pointsData={stationPoints}
+            pointsData={globePointsData}
             pointLat={(d) => d.lat}
             pointLng={(d) => d.lng}
-            pointColor={(d) => d.color}
-            pointAltitude={(d) => (d.station_id === selectedStationId ? 0.18 : 0.12)}
-            pointRadius={(d) => (d.station_id === selectedStationId ? 0.28 : 0.18)}
-            onPointClick={(point) => setSelectedStationId(point.station_id)}
+            pointColor={(d) => (d.isHalo ? hexToRgba(d.color, 0.18) : 'rgba(0,0,0,0)')}
+            pointAltitude={(d) => (d.isHalo ? 0.12 : d.station_id === selectedStationId ? 0.6 : 0.5)}
+            pointRadius={(d) => (d.isHalo ? 0.9 : d.station_id === selectedStationId ? 1.7 : 1.3)}
+            pointResolution={32}
+            pointMerge={false}
+            htmlElementsData={htmlPins}
+            htmlLat={(d) => d.lat}
+            htmlLng={(d) => d.lng}
+            htmlAltitude={(d) => (d.station_id === selectedStationId ? 0.12 : 0.08)}
+            htmlElement={(d) => {
+              const el = document.createElement('button')
+              el.type = 'button'
+              el.className = `station-pin ${selectedStationId === d.station_id ? 'station-pin--selected' : ''}`
+              el.title = `${d.name} (${d.station_id})`
+              el.style.transform = 'translate(-50%, -100%)'
+              el.style.zIndex = selectedStationId === d.station_id ? '20' : '10'
+              el.innerHTML = `
+                <svg viewBox="0 0 120 120" width="100%" height="100%" aria-hidden="true" focusable="false">
+                  <path d="M60 10c-24.9 0-45 20.1-45 45 0 31.4 36 57 43.2 63.1a4.7 4.7 0 0 0 3.6 0C69 112 105 86.4 105 55 105 30.1 84.9 10 60 10Z" fill="${d.color || '#16e0b4'}" stroke="${selectedStationId === d.station_id ? '#f8fbff' : '#000000'}" stroke-width="7" stroke-linejoin="round"/>
+                  <circle cx="60" cy="55" r="${selectedStationId === d.station_id ? 18 : 15}" fill="#0b0f17" stroke="${selectedStationId === d.station_id ? '#f8fbff' : '#000000'}" stroke-width="6"/>
+                </svg>
+              `
+              el.addEventListener('click', () => {
+                setSelectedStationId(d.station_id)
+                if (onStationSelect) onStationSelect(d.station_id)
+                else if (onExplore) onExplore()
+              })
+              return el
+            }}
+            htmlElementVisibilityModifier={(element, isVisible) => {
+              element.style.display = isVisible ? 'block' : 'none'
+              element.style.pointerEvents = isVisible ? 'auto' : 'none'
+            }}
+            pointLabel={(d) => (d.isHalo ? '' : `<div style="padding:8px 10px;border-radius:8px;background:rgba(8,18,34,0.9);border:1px solid ${d.color};box-shadow:0 0 12px ${d.color};color:#edf6ff;font-size:11px;">${d.name}<br /><span style="color:${d.color};font-weight:700;">${d.health}</span></div>`)}
+            onPointClick={(point) => {
+              if (point.isHalo) return
+              setSelectedStationId(point.station_id)
+              if (onStationSelect) onStationSelect(point.station_id)
+              else if (onExplore) onExplore()
+            }}
           />
         </div>
         <aside className="globe-station-rail">
@@ -243,7 +354,11 @@ export default function Hero({ onExplore }) {
           </div>
           <div className="globe-station-list">
             {stations.map((station) => (
-              <button key={station.station_id} type="button" className={`globe-station-item ${selectedStationId === station.station_id ? 'globe-station-item--active' : ''}`} onClick={() => setSelectedStationId(station.station_id)}>
+              <button key={station.station_id} type="button" className={`globe-station-item ${selectedStationId === station.station_id ? 'globe-station-item--active' : ''}`} onClick={() => {
+                setSelectedStationId(station.station_id)
+                if (onStationSelect) onStationSelect(station.station_id)
+                else if (onExplore) onExplore()
+              }}>
                 <strong>{station.city}</strong>
                 <span className="mono">{station.station_id}</span>
               </button>

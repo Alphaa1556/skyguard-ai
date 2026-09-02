@@ -132,6 +132,32 @@
   display: block;
 }
 
+.station-pin {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+  transform: translate(-50%, -100%);
+  filter: drop-shadow(0 0 12px rgba(0, 0, 0, 0.3));
+  z-index: 10;
+}
+
+.station-pin svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.station-pin--selected {
+  width: 38px;
+  height: 38px;
+  filter: drop-shadow(0 0 18px rgba(255, 255, 255, 0.35));
+}
+
 .hero-content {
   position: relative;
   z-index: 1;
