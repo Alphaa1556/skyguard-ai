@@ -115,7 +115,9 @@ def seed_demo_data() -> None:
             continue
 
         readings = Readings(**DEMO_READINGS[station_id])
-        anomaly = _detect_anomaly(readings)
+        # NOTE: was previously called as _detect_anomaly(readings) — missing
+        # the required station_id argument, which would crash on startup.
+        anomaly = _detect_anomaly(station_id, readings)
         _stations[station_id] = StationStatus(
             station_id=station_id,
             timestamp=datetime.now(timezone.utc),
@@ -137,17 +139,12 @@ def startup_event() -> None:
 # ---------------------------------------------------------------------------
 # Anomaly detection — loads a model trained by train_and_evaluate.py against
 # Bhakti's real synthetic dataset (see backend/data/), instead of training on
-# inline placeholder data.
+# inline placeholder data. Combines the ML model with a physics-informed rule
+# for cross_sensor faults (see features.py — PRD Section 4.4 hybrid approach).
 #
 # Falls back to training on synthetic placeholder data ONLY if model.joblib /
 # feature_stats.json aren't present yet (e.g. a teammate hasn't run
 # train_and_evaluate.py locally) — so the API still works out of the box.
-#
-# TODO (later days):
-#   - Replace/augment with LSTM-Autoencoder for full temporal pattern learning
-#   - Real anomaly type classification (spike/flatline/drift/noise/cross_sensor)
-#     instead of the simple heuristic below (Ronak, Day 4-5)
-#   - SHAP-based explanation instead of the z-score text below (Day 5-6)
 # ---------------------------------------------------------------------------
 
 MODEL_PATH = "model.joblib"
@@ -179,10 +176,11 @@ def _load_or_train_fallback():
     pressure = rng.normal(feature_stats["pressure_hpa"]["mean"], feature_stats["pressure_hpa"]["std"], n)
     humidity = np.clip(rng.normal(feature_stats["humidity_pct"]["mean"], feature_stats["humidity_pct"]["std"], n), 0, 100)
 
-    # Build matching 10-feature vectors (temporal features default to 0 since
+    # Build matching feature vectors (temporal features default to 0 since
     # this fallback has no real sequential history) so shape matches the real
-    # trained model.
-    zeros = np.zeros((n, 7))
+    # trained model — 13 features: 3 raw + 3 delta + 3 rolling_std + 1 stale
+    # streak + 3 long-term deviation.
+    zeros = np.zeros((n, 10))
     X_train = np.column_stack([temp, pressure, humidity, zeros])
 
     model = IsolationForest(n_estimators=100, contamination=0.05, random_state=42)
@@ -203,18 +201,39 @@ def _detect_anomaly(station_id: str, readings: Readings) -> AnomalyResult:
         readings.temperature_c, readings.pressure_hpa, readings.humidity_pct
     ).reshape(1, -1)
 
-    prediction = _model.predict(feature_vector)[0]  # -1 = anomaly, 1 = normal
+    ml_prediction = _model.predict(feature_vector)[0]  # -1 = anomaly, 1 = normal
     score = _model.decision_function(feature_vector)[0]  # higher = more "normal"
-    is_anomaly = prediction == -1
+    ml_is_anomaly = ml_prediction == -1
+
+    # Physics-informed rule (checked AFTER update_and_build, so it sees this
+    # reading's history): catches cross-sensor faults the ML model tends to
+    # miss once temporal features are added, per the PRD's hybrid ML +
+    # physics-rule approach (Section 4.4).
+    physics_flag = builder.check_cross_sensor_rule()
+
+    is_anomaly = ml_is_anomaly or physics_flag
 
     # Rough 0-1 confidence from the raw decision score — not calibrated, just
-    # enough to show something meaningful for now.
-    confidence = float(np.clip(0.5 - score, 0.0, 1.0))
+    # enough to show something meaningful for now. Physics-rule-only flags
+    # get a fixed moderate confidence since they don't have an ML score.
+    confidence = float(np.clip(0.5 - score, 0.0, 1.0)) if ml_is_anomaly else (0.7 if physics_flag else 0.0)
 
     affected_parameter = None
+    anomaly_type = AnomalyType.none
     explanation = "Reading falls within the expected range for temperature, pressure, and humidity."
 
-    if is_anomaly:
+    if physics_flag:
+        # Physics rule takes priority for the explanation — it identifies a
+        # SPECIFIC, well-understood fault signature, whereas the ML model's
+        # z-score explanation below is a more generic fallback.
+        anomaly_type = AnomalyType.cross_sensor
+        affected_parameter = "multiple"
+        explanation = (
+            "Humidity is pinned near saturation while temperature is simultaneously above its "
+            "recent average — this combination violates the expected inverse temperature/humidity "
+            "relationship and is a strong signal of a cross-sensor fault rather than genuine weather."
+        )
+    elif ml_is_anomaly:
         # Identify which parameter deviates most, using simple z-scores —
         # placeholder for Ronak's real anomaly-type classification later.
         values = {
@@ -228,6 +247,7 @@ def _detect_anomaly(station_id: str, readings: Readings) -> AnomalyResult:
         }
         affected_parameter = max(z_scores, key=z_scores.get)
         z = z_scores[affected_parameter]
+        anomaly_type = AnomalyType.spike
         explanation = (
             f"{affected_parameter} deviates {z:.1f} standard deviations from the expected pattern, "
             f"while other readings are broadly consistent — flagged as a likely sensor anomaly rather "
@@ -236,7 +256,7 @@ def _detect_anomaly(station_id: str, readings: Readings) -> AnomalyResult:
 
     return AnomalyResult(
         is_anomaly=is_anomaly,
-        type=AnomalyType.spike if is_anomaly else AnomalyType.none,
+        type=anomaly_type,
         confidence=round(confidence, 2),
         explanation=explanation,
         affected_parameter=affected_parameter,

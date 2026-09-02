@@ -4,7 +4,8 @@ train_and_evaluate.py
 
 Retrains the Isolation Forest anomaly detector on Bhakti's real synthetic
 dataset (backend/data/synthetic_readings.jsonl + synthetic_labels.csv), using
-temporal features (see features.py) instead of raw readings alone.
+temporal features (see features.py) instead of raw readings alone, combined
+with a physics-informed rule for cross_sensor faults.
 
 Evaluates detection quality against ground truth — precision, recall, F1,
 false-positive rate, and a per-fault-type breakdown — and saves the trained
@@ -57,19 +58,22 @@ def load_dataset(data_dir: str) -> pd.DataFrame:
     return df.sort_values(["station_id", "timestamp"]).reset_index(drop=True)
 
 
-def build_temporal_features(df: pd.DataFrame) -> np.ndarray:
+def build_features_and_physics_flags(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """
     Feeds each station's readings through StationFeatureBuilder in chronological
     order — the SAME class main.py uses at inference time — so training features
-    and live features are computed identically.
+    and live features are computed identically. Also collects the physics-rule
+    cross_sensor flag alongside each row's feature vector.
     """
     feature_rows = []
+    physics_flags = []
     for station_id, group in df.groupby("station_id", sort=False):
         builder = StationFeatureBuilder()
         for _, row in group.iterrows():
             vec = builder.update_and_build(row["temperature_c"], row["pressure_hpa"], row["humidity_pct"])
             feature_rows.append(vec)
-    return np.array(feature_rows)
+            physics_flags.append(builder.check_cross_sensor_rule())
+    return np.array(feature_rows), np.array(physics_flags)
 
 
 def train_model(df: pd.DataFrame, X: np.ndarray) -> tuple[IsolationForest, dict]:
@@ -83,8 +87,6 @@ def train_model(df: pd.DataFrame, X: np.ndarray) -> tuple[IsolationForest, dict]
     model = IsolationForest(n_estimators=200, contamination=contamination, random_state=42)
     model.fit(X_train)
 
-    # Save raw-feature mean/std separately for the explanation layer in main.py
-    # (identifies which physical parameter deviates most, in plain language).
     clean_df = df[~df["is_anomaly_true"]]
     feature_stats = {
         name: {"mean": float(clean_df[name].mean()), "std": float(clean_df[name].std())}
@@ -93,42 +95,41 @@ def train_model(df: pd.DataFrame, X: np.ndarray) -> tuple[IsolationForest, dict]
     return model, feature_stats
 
 
-def evaluate_model(model: IsolationForest, df: pd.DataFrame, X: np.ndarray) -> None:
-    """Prints precision/recall/F1, false-positive rate, and per-fault-type recall."""
+def evaluate_model(model: IsolationForest, df: pd.DataFrame, X: np.ndarray, physics_flags: np.ndarray) -> None:
+    """Prints precision/recall/F1, false-positive rate, and per-fault-type recall,
+    for the ML model alone AND for the combined ML + physics-rule detector."""
     y_true = df["is_anomaly_true"].values
-    predictions = model.predict(X)  # -1 = anomaly, 1 = normal
-    y_pred = predictions == -1
+    ml_pred = model.predict(X) == -1  # -1 = anomaly, 1 = normal
+    combined_pred = ml_pred | physics_flags  # physics rule can flag things ML misses
 
-    precision = precision_score(y_true, y_pred, zero_division=0)
-    recall = recall_score(y_true, y_pred, zero_division=0)
-    f1 = f1_score(y_true, y_pred, zero_division=0)
+    def _report(y_pred: np.ndarray, label: str) -> None:
+        precision = precision_score(y_true, y_pred, zero_division=0)
+        recall = recall_score(y_true, y_pred, zero_division=0)
+        f1 = f1_score(y_true, y_pred, zero_division=0)
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
 
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
-    false_positive_rate = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+        print(f"\n--- {label} ---")
+        print(f"Precision: {precision:.3f}  Recall: {recall:.3f}  F1: {f1:.3f}  FPR: {fpr:.3f}")
+        print(f"(TP={tp}, FP={fp}, FN={fn}, TN={tn})")
+        print("Recall by fault type:")
+        for fault_type in df.loc[y_true, "fault_type"].unique():
+            mask = (df["fault_type"] == fault_type).values
+            type_recall = y_pred[mask].mean() if mask.sum() > 0 else 0.0
+            print(f"  {fault_type:15s} {type_recall * 100:5.1f}%  ({mask.sum()} readings)")
 
-    print("\n" + "=" * 50)
-    print("EVALUATION — Isolation Forest + temporal features vs. ground truth")
-    print("=" * 50)
-    print(f"Total readings:        {len(df)}")
-    print(f"True anomalies:        {int(y_true.sum())} ({y_true.mean() * 100:.1f}%)")
-    print(f"Flagged as anomalies:  {int(y_pred.sum())} ({y_pred.mean() * 100:.1f}%)")
-    print()
-    print(f"Precision:             {precision:.3f}")
-    print(f"Recall:                {recall:.3f}")
-    print(f"F1 score:              {f1:.3f}")
-    print(f"False positive rate:   {false_positive_rate:.3f}")
-    print(f"(TP={tp}, FP={fp}, FN={fn}, TN={tn})")
+    print("\n" + "=" * 60)
+    print("EVALUATION — vs. ground truth")
+    print("=" * 60)
+    print(f"Total readings: {len(df)} | True anomalies: {int(y_true.sum())} ({y_true.mean() * 100:.1f}%)")
 
-    print("\nRecall by fault type (of the injected faults, how many did the model catch?):")
-    for fault_type in df.loc[df["is_anomaly_true"], "fault_type"].unique():
-        mask = (df["fault_type"] == fault_type).values
-        type_recall = y_pred[mask].mean() if mask.sum() > 0 else 0.0
-        print(f"  {fault_type:15s} {type_recall * 100:5.1f}%  ({mask.sum()} readings)")
-    print("=" * 50 + "\n")
+    _report(ml_pred, "ML model only (Isolation Forest)")
+    _report(combined_pred, "ML model + physics rule (final combined detector)")
+    print("=" * 60 + "\n")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Retrain and evaluate the anomaly model with temporal features")
+    parser = argparse.ArgumentParser(description="Retrain and evaluate the anomaly model with temporal features + physics rule")
     parser.add_argument("--data-dir", type=str, default="data", help="Directory with synthetic_readings.jsonl and synthetic_labels.csv")
     parser.add_argument("--output-dir", type=str, default=".", help="Where to save model.joblib and feature_stats.json")
     args = parser.parse_args()
@@ -137,14 +138,14 @@ def main():
     df = load_dataset(args.data_dir)
     print(f"Loaded {len(df)} readings across {df['station_id'].nunique()} stations.")
 
-    print("Building temporal features (same logic main.py will use live)...")
-    X = build_temporal_features(df)
+    print("Building temporal features + physics-rule flags (same logic main.py will use live)...")
+    X, physics_flags = build_features_and_physics_flags(df)
     print(f"Feature matrix shape: {X.shape} ({len(FEATURE_NAMES)} features)")
 
     print("Training Isolation Forest on clean readings...")
     model, feature_stats = train_model(df, X)
 
-    evaluate_model(model, df, X)
+    evaluate_model(model, df, X, physics_flags)
 
     model_path = os.path.join(args.output_dir, "model.joblib")
     stats_path = os.path.join(args.output_dir, "feature_stats.json")
