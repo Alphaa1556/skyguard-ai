@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from features import StationFeatureBuilder
+import lstm_drift_detector
 
 app = FastAPI(title="SkyGuard AI", description="Anomaly detection API for Automatic Weather Stations")
 
@@ -256,6 +257,47 @@ _model, _feature_stats = _load_or_train_fallback()
 # reflects that station's real recent history — same class used in training.
 _feature_builders: dict[str, StationFeatureBuilder] = defaultdict(StationFeatureBuilder)
 
+# ---------------------------------------------------------------------------
+# LSTM-Autoencoder drift detector — a THIRD signal, specifically added
+# because the engineered long_dev feature (features.py) can't reliably
+# separate genuine drift from ordinary diurnal temperature swings, which are
+# often the same order of magnitude. See lstm_drift_detector.py for the full
+# rationale and train_and_evaluate.py's evaluation output for the measured
+# recall/precision trade-off (drift recall 19.9% -> ~63%, at some FPR cost).
+#
+# Falls back to running WITHOUT the LSTM signal if its artifacts aren't
+# present yet (e.g. a teammate hasn't re-run train_and_evaluate.py since
+# this was added) — the API still works, just without drift coverage.
+# ---------------------------------------------------------------------------
+
+LSTM_WEIGHTS_PATH = "lstm_drift_model.pt"
+LSTM_CONFIG_PATH = "lstm_drift_config.json"
+_lstm_model = None
+_lstm_scaler_stats = None
+_lstm_threshold = None
+
+if os.path.exists(LSTM_WEIGHTS_PATH) and os.path.exists(LSTM_CONFIG_PATH):
+    _lstm_model, _lstm_scaler_stats, _lstm_threshold = lstm_drift_detector.load_artifacts(
+        LSTM_WEIGHTS_PATH, LSTM_CONFIG_PATH
+    )
+    print(f"Loaded LSTM drift detector from {LSTM_WEIGHTS_PATH}")
+else:
+    print(f"WARNING: {LSTM_WEIGHTS_PATH} not found — running WITHOUT the LSTM drift "
+          f"signal. Run train_and_evaluate.py to generate it (drift recall will stay "
+          f"low without it — see features.py's v4 fix note).")
+
+_drift_detectors: dict[str, lstm_drift_detector.DriftDetector] = {}
+
+
+def _get_drift_detector(station_id: str) -> Optional[lstm_drift_detector.DriftDetector]:
+    if _lstm_model is None:
+        return None
+    if station_id not in _drift_detectors:
+        _drift_detectors[station_id] = lstm_drift_detector.DriftDetector(
+            _lstm_model, _lstm_scaler_stats, _lstm_threshold
+        )
+    return _drift_detectors[station_id]
+
 
 def _detect_anomaly(station_id: str, readings: Readings) -> AnomalyResult:
     builder = _feature_builders[station_id]
@@ -273,12 +315,25 @@ def _detect_anomaly(station_id: str, readings: Readings) -> AnomalyResult:
     # physics-rule approach (Section 4.4).
     physics_flag = builder.check_cross_sensor_rule()
 
-    is_anomaly = ml_is_anomaly or physics_flag
+    # LSTM-Autoencoder drift signal — see the module-level comment above for
+    # why this exists as a separate detector rather than another engineered
+    # feature. Returns None until the station has WINDOW_SIZE readings of
+    # history (cold start), so brand-new stations won't get a drift flag
+    # from their first few readings.
+    drift_detector = _get_drift_detector(station_id)
+    drift_flag = drift_detector.is_drift(
+        readings.temperature_c, readings.pressure_hpa, readings.humidity_pct
+    ) if drift_detector is not None else False
+
+    is_anomaly = ml_is_anomaly or physics_flag or drift_flag
 
     # Rough 0-1 confidence from the raw decision score — not calibrated, just
-    # enough to show something meaningful for now. Physics-rule-only flags
-    # get a fixed moderate confidence since they don't have an ML score.
-    confidence = float(np.clip(0.5 - score, 0.0, 1.0)) if ml_is_anomaly else (0.7 if physics_flag else 0.0)
+    # enough to show something meaningful for now. Physics-rule-only and
+    # drift-only flags get a fixed moderate confidence since they don't have
+    # an ML score.
+    confidence = float(np.clip(0.5 - score, 0.0, 1.0)) if ml_is_anomaly else (
+        0.7 if physics_flag else (0.65 if drift_flag else 0.0)
+    )
 
     affected_parameter = None
     anomaly_type = AnomalyType.none
@@ -294,6 +349,19 @@ def _detect_anomaly(station_id: str, readings: Readings) -> AnomalyResult:
             "Humidity is pinned near saturation while temperature is simultaneously above its "
             "recent average — this combination violates the expected inverse temperature/humidity "
             "relationship and is a strong signal of a cross-sensor fault rather than genuine weather."
+        )
+    elif drift_flag:
+        # Drift takes priority over the generic ML/z-score explanation below
+        # for the same reason as physics_flag — it identifies a specific
+        # fault signature (gradual deviation from the station's learned
+        # normal pattern) that the ML model's single-reading z-score can't
+        # express, since drift is only visible across a sequence of readings.
+        anomaly_type = AnomalyType.drift
+        affected_parameter = None
+        explanation = (
+            "Recent readings deviate gradually from this station's learned normal pattern in a way "
+            "that ordinary day-to-day weather variation doesn't — consistent with slow sensor "
+            "calibration drift rather than a sudden fault or genuine weather change."
         )
     elif ml_is_anomaly:
         # Identify which parameter deviates most, using simple z-scores —
