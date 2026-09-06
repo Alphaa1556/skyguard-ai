@@ -85,14 +85,14 @@ _stations: dict[str, StationStatus] = {}
 _locations: dict[str, Location] = {}
 
 DEMO_STATIONS = [
-    {"station_id": "AWS-IND-MH-001", "name": "Mumbai Coastal AWS", "city": "Mumbai", "state": "Maharashtra", "latitude": 19.0760, "longitude": 72.8777, "health": "normal", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=43003"},
-    {"station_id": "AWS-IND-DL-011", "name": "Delhi Plains AWS", "city": "New Delhi", "state": "Delhi", "latitude": 28.6139, "longitude": 77.2090, "health": "normal", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=42182"},
-    {"station_id": "AWS-IND-KA-004", "name": "Bangalore Plateau AWS", "city": "Bengaluru", "state": "Karnataka", "latitude": 12.9716, "longitude": 77.5946, "health": "degraded", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=43295"},
-    {"station_id": "AWS-IND-TN-003", "name": "Chennai Coastal AWS", "city": "Chennai", "state": "Tamil Nadu", "latitude": 13.0827, "longitude": 80.2707, "health": "anomaly", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=43279"},
-    {"station_id": "AWS-IND-WB-007", "name": "Kolkata Delta AWS", "city": "Kolkata", "state": "West Bengal", "latitude": 22.5726, "longitude": 88.3639, "health": "normal", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=42807"},
-    {"station_id": "AWS-IND-GJ-001", "name": "Ahmedabad Semi-Arid AWS", "city": "Ahmedabad", "state": "Gujarat", "latitude": 23.0225, "longitude": 72.5714, "health": "normal", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=42647"},
-    {"station_id": "AWS-IND-UP-001", "name": "Lucknow Central AWS", "city": "Lucknow", "state": "Uttar Pradesh", "latitude": 26.8467, "longitude": 80.9462, "health": "normal", "feed_url": "https://mausam.imd.gov.in/"},
-    {"station_id": "AWS-IND-KL-001", "name": "Trivandrum Tropical AWS", "city": "Thiruvananthapuram", "state": "Kerala", "latitude": 8.5241, "longitude": 76.9366, "health": "normal", "feed_url": "https://mausam.imd.gov.in/"},
+    {"station_id": "AWS-IND-MH-001", "name": "Mumbai Coastal AWS", "city": "Mumbai", "state": "Maharashtra", "latitude": 19.0760, "longitude": 72.8777, "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=43003"},
+    {"station_id": "AWS-IND-DL-011", "name": "Delhi Plains AWS", "city": "New Delhi", "state": "Delhi", "latitude": 28.6139, "longitude": 77.2090, "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=42182"},
+    {"station_id": "AWS-IND-KA-004", "name": "Bangalore Plateau AWS", "city": "Bengaluru", "state": "Karnataka", "latitude": 12.9716, "longitude": 77.5946, "seed_fault": "spike", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=43295"},
+    {"station_id": "AWS-IND-TN-003", "name": "Chennai Coastal AWS", "city": "Chennai", "state": "Tamil Nadu", "latitude": 13.0827, "longitude": 80.2707, "seed_fault": "cross_sensor", "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=43279"},
+    {"station_id": "AWS-IND-WB-007", "name": "Kolkata Delta AWS", "city": "Kolkata", "state": "West Bengal", "latitude": 22.5726, "longitude": 88.3639, "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=42807"},
+    {"station_id": "AWS-IND-GJ-001", "name": "Ahmedabad Semi-Arid AWS", "city": "Ahmedabad", "state": "Gujarat", "latitude": 23.0225, "longitude": 72.5714, "feed_url": "https://city.imd.gov.in/citywx/city_weather.php?id=42647"},
+    {"station_id": "AWS-IND-UP-001", "name": "Lucknow Central AWS", "city": "Lucknow", "state": "Uttar Pradesh", "latitude": 26.8467, "longitude": 80.9462, "feed_url": "https://mausam.imd.gov.in/"},
+    {"station_id": "AWS-IND-KL-001", "name": "Trivandrum Tropical AWS", "city": "Thiruvananthapuram", "state": "Kerala", "latitude": 8.5241, "longitude": 76.9366, "feed_url": "https://mausam.imd.gov.in/"},
 ]
 
 DEMO_READINGS = {
@@ -108,22 +108,84 @@ DEMO_READINGS = {
 
 
 def seed_demo_data() -> None:
-    """Populate the in-memory station store with a realistic Indian AWS inventory."""
+    """
+    Populate the in-memory station store with a realistic Indian AWS inventory.
+
+    Two stations (Bangalore, Chennai) are seeded with a REAL fault so the demo
+    shows genuine detection output, not a hardcoded label. Each such station
+    gets fed a normal baseline reading first (to establish rolling history for
+    its StationFeatureBuilder), then a second reading shaped like an actual
+    fault — this matters especially for the physics-informed cross_sensor
+    rule, which needs at least one prior reading to compare against.
+    """
     for station in DEMO_STATIONS:
         station_id = station["station_id"]
         if station_id in _stations:
             continue
 
-        readings = Readings(**DEMO_READINGS[station_id])
-        # NOTE: was previously called as _detect_anomaly(readings) — missing
-        # the required station_id argument, which would crash on startup.
-        anomaly = _detect_anomaly(station_id, readings)
+        baseline = Readings(**DEMO_READINGS[station_id])
+        seed_fault = station.get("seed_fault")
+
+        if seed_fault is None:
+            # No fault intended — a SINGLE clean detection call. Calling
+            # _detect_anomaly twice with identical values (as an earlier
+            # version of this function did) creates an artificial "value
+            # repeated" pattern that the flatline-sensitive model picks up
+            # on, incorrectly flagging every normal station.
+            final_readings = baseline
+            anomaly = _detect_anomaly(station_id, final_readings)
+        else:
+            # Establish rolling history first with a few slightly-varying
+            # normal baseline readings — the physics rule requires at least 3
+            # prior readings in its humidity-gated baseline before it'll trust
+            # a comparison (see features.py), and using distinct values here
+            # (rather than repeating the exact same one) avoids tripping the
+            # flatline-sensitive model on an artificial "value didn't change"
+            # pattern. THEN feed a genuinely different, fault-shaped reading.
+            for i, jitter in enumerate([-0.2, 0.15, -0.1, 0.05]):
+                _detect_anomaly(
+                    station_id,
+                    Readings(
+                        temperature_c=baseline.temperature_c + jitter,
+                        pressure_hpa=baseline.pressure_hpa + jitter,
+                        humidity_pct=baseline.humidity_pct + jitter,
+                    ),
+                )
+
+            if seed_fault == "cross_sensor":
+                # Humidity pinned near saturation while temperature rises above
+                # the baseline just established — triggers check_cross_sensor_rule().
+                final_readings = Readings(
+                    temperature_c=baseline.temperature_c + 4.0,
+                    pressure_hpa=baseline.pressure_hpa,
+                    humidity_pct=95.0,
+                )
+            else:  # "spike"
+                final_readings = Readings(
+                    temperature_c=baseline.temperature_c + 12.0,
+                    pressure_hpa=baseline.pressure_hpa,
+                    humidity_pct=baseline.humidity_pct,
+                )
+
+            anomaly = _detect_anomaly(station_id, final_readings)
+
+        # Health label reflects the REAL detection result, not a hardcoded
+        # guess — cross_sensor (our physics-rule differentiator) gets the
+        # most severe "anomaly" label, any other real detection is "degraded",
+        # otherwise "normal".
+        if anomaly.type == AnomalyType.cross_sensor:
+            health = "anomaly"
+        elif anomaly.is_anomaly:
+            health = "degraded"
+        else:
+            health = "normal"
+
         _stations[station_id] = StationStatus(
             station_id=station_id,
             timestamp=datetime.now(timezone.utc),
-            readings=readings,
+            readings=final_readings,
             anomaly=anomaly,
-            sensor_health=station["health"],
+            sensor_health=health,
         )
         _locations[station_id] = Location(
             latitude=station["latitude"],
