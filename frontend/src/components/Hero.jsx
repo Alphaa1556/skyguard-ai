@@ -3,23 +3,12 @@ import Globe from 'react-globe.gl'
 import './Hero.css'
 import { DEFAULT_STATIONS, fetchStations } from '../data/stations'
 
-const STATION_DOTS = [
-  { x: 22, y: 30, delay: 0 },
-  { x: 68, y: 18, delay: 0.6 },
-  { x: 45, y: 52, delay: 1.1 },
-  { x: 82, y: 60, delay: 0.3 },
-  { x: 15, y: 68, delay: 1.6 },
-  { x: 58, y: 78, delay: 0.9 },
-  { x: 88, y: 30, delay: 1.9 },
-]
-
 const WORLD_LABELS = [
   { label: 'North America', lat: 39, lng: -98 },
   { label: 'Brazil', lat: -15, lng: -52 },
   { label: 'Europe', lat: 52, lng: 15 },
   { label: 'Africa', lat: 4, lng: 20 },
   { label: 'India', lat: 22, lng: 78 },
-  { label: 'China', lat: 35, lng: 104 },
   { label: 'Australia', lat: -25, lng: 133 },
 ]
 
@@ -95,6 +84,7 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
   const [pulseTick, setPulseTick] = useState(0)
   const [cameraAltitude, setCameraAltitude] = useState(1.8)
   const [isRotating, setIsRotating] = useState(true)
+  const [waveStationId, setWaveStationId] = useState(DEFAULT_STATIONS[0].station_id)
 
   useEffect(() => {
     let active = true
@@ -131,21 +121,39 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
 
   useEffect(() => {
     let mounted = true
+    let resetTimeout
     const cycle = () => {
       if (!mounted) return
-      setPhase('flagging')
-      setPath(buildWavePath(true))
-      setTimeout(() => {
-        if (!mounted) return
-        setPhase('calm')
-        setPath(buildWavePath(false))
-      }, 2200)
+      if (stations.length === 0) return
+      const station = stations[Math.floor(Math.random() * stations.length)]
+      const isAnomaly = station.health === 'anomaly'
+      setWaveStationId(station.station_id)
+      setPhase(isAnomaly ? 'flagging' : 'calm')
+      setPath(buildWavePath(isAnomaly))
+      if (isAnomaly) {
+        resetTimeout = setTimeout(() => {
+          if (!mounted) return
+          setPhase('calm')
+          setPath(buildWavePath(false))
+        }, 2200)
+      }
     }
 
     const interval = setInterval(cycle, 5200)
     const first = setTimeout(cycle, 1800)
-    return () => { mounted = false; clearInterval(interval); clearTimeout(first) }
-  }, [])
+    return () => {
+      mounted = false
+      clearInterval(interval)
+      clearTimeout(first)
+      clearTimeout(resetTimeout)
+    }
+  }, [stations])
+
+  useEffect(() => {
+    if (!stations.some((station) => station.station_id === waveStationId)) {
+      setWaveStationId(stations[0]?.station_id || DEFAULT_STATIONS[0].station_id)
+    }
+  }, [stations, waveStationId])
 
   useEffect(() => {
     if (!globeRef.current) return
@@ -185,6 +193,29 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
 
   const selectedStation = useMemo(
     () => stations.find((station) => station.station_id === selectedStationId) ?? stations[0] ?? DEFAULT_STATIONS[0],
+    [selectedStationId, stations]
+  )
+
+  const waveStation = useMemo(
+    () => stations.find((station) => station.station_id === waveStationId) ?? selectedStation,
+    [selectedStation, stations, waveStationId]
+  )
+
+  const waveStatus = (waveStation.health || 'normal').toLowerCase()
+
+  const radarStations = useMemo(
+    () =>
+      stations
+        .filter((station) => station.latitude != null && station.longitude != null)
+        .map((station, index) => ({
+          ...station,
+          x: Math.max(8, Math.min(92, ((station.longitude - 68) / 22) * 84 + 8)),
+          y: Math.max(10, Math.min(88, 88 - ((station.latitude - 7) / 24) * 78)),
+          delay: (index * 0.37) % 2.4,
+          isSelected: station.station_id === selectedStationId,
+          isAnomaly: station.health === 'anomaly',
+          isDegraded: station.health === 'degraded',
+        })),
     [selectedStationId, stations]
   )
 
@@ -274,22 +305,40 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
 
   return (
     <section className="hero">
-      <div className="hero-field" aria-hidden="true">
+      <div className="hero-field">
         <div className="radar-glow" />
         <svg className="hero-sweep" viewBox="0 0 100 100" preserveAspectRatio="none">
           <circle cx="50" cy="50" r="46" className="ring ring-1" />
           <circle cx="50" cy="50" r="32" className="ring ring-2" />
           <circle cx="50" cy="50" r="18" className="ring ring-3" />
           <line x1="50" y1="50" x2="50" y2="4" className="sweep-arm" />
-          {STATION_DOTS.map((dot, index) => (
+          {radarStations.map((station) => (
             <circle
-              key={index}
-              cx={dot.x}
-              cy={dot.y}
-              r="1.4"
-              className={`station-dot ${phase === 'flagging' && index === 2 ? 'station-dot--alert' : ''}`}
-              style={{ animationDelay: `${dot.delay}s` }}
-            />
+              key={station.station_id}
+              cx={station.x}
+              cy={station.y}
+              r={station.isSelected ? '2.8' : '1.6'}
+              className={`station-dot ${station.isAnomaly ? 'station-dot--alert' : ''} ${station.isDegraded ? 'station-dot--degraded' : ''} ${station.isSelected ? 'station-dot--selected' : ''}`}
+              style={{ animationDelay: `${station.delay}s` }}
+              tabIndex="0"
+              role="button"
+              aria-label={`Select ${station.city} AWS station`}
+              onClick={() => {
+                setSelectedStationId(station.station_id)
+                if (onStationSelect) onStationSelect(station.station_id)
+                else if (onExplore) onExplore()
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  setSelectedStationId(station.station_id)
+                  if (onStationSelect) onStationSelect(station.station_id)
+                  else if (onExplore) onExplore()
+                }
+              }}
+            >
+              <title>{station.city} AWS</title>
+            </circle>
           ))}
         </svg>
         <span className="radar-readout radar-readout--top mono">LIVE SCAN · 360°</span>
@@ -298,8 +347,8 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
 
       <div className="hero-content">
         <div className="hero-eyebrow mono">
-          <span className={`status-pip ${phase === 'flagging' ? 'status-pip--alert' : ''}`} />
-          {phase === 'flagging' ? `ANOMALY FLAGGED · ${selectedStation.station_id}` : `MONITORING ${stations.length} AWS STATIONS · INDIA NETWORK LIVE`}
+          <span className={`status-pip ${waveStatus === 'anomaly' ? 'status-pip--alert' : waveStatus === 'degraded' ? 'status-pip--degraded' : ''}`} />
+          {waveStatus === 'anomaly' ? `ANOMALY FLAGGED · ${waveStation.station_id}` : `${waveStatus.toUpperCase()} · ${waveStation.station_id} · ${stations.length} AWS STATIONS`}
         </div>
 
         <h1 className="hero-title">
@@ -317,8 +366,10 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
             <path d={path} className={`hero-wave-path ${phase === 'flagging' ? 'hero-wave-path--alert' : ''}`} />
           </svg>
           <div className="hero-wave-label mono">
-            {selectedStation.station_id}
-            {phase === 'flagging' && <span className="hero-wave-tag">spike · 0.87 confidence</span>}
+            {waveStation.station_id} · {waveStation.city}
+            {waveStatus === 'anomaly' && <span className="hero-wave-tag">spike · anomaly</span>}
+            {waveStatus === 'degraded' && <span className="hero-wave-tag hero-wave-tag--degraded">degraded · monitor</span>}
+            {waveStatus === 'normal' && <span className="hero-wave-tag hero-wave-tag--normal">normal · stable</span>}
           </div>
         </div>
 
