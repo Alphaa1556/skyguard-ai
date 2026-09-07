@@ -23,6 +23,23 @@ const WORLD_LABELS = [
   { label: 'Australia', lat: -25, lng: 133 },
 ]
 
+const STATION_LABEL_LAYOUT = {
+  'AWS-IND-KA-004': { latOffset: 0.2, lngOffset: -1.7, priority: 3 },
+  'AWS-IND-TN-003': { latOffset: -0.2, lngOffset: 1.7, priority: 2 },
+  'AWS-IND-DL-011': { latOffset: 0.25, lngOffset: -1.5, priority: 3 },
+  'AWS-IND-UP-001': { latOffset: -0.25, lngOffset: 1.5, priority: 2 },
+}
+
+function getStationLabelLayout(stationId) {
+  return STATION_LABEL_LAYOUT[stationId] || { latOffset: 0, lngOffset: 0, priority: 1 }
+}
+
+function getGlobeVisibilityTier(altitude) {
+  if (altitude > 3.2) return 'overview'
+  if (altitude > 2.35) return 'regional'
+  return 'local'
+}
+
 function hexToRgba(hex, alpha) {
   const value = hex.replace('#', '')
   const full = value.length === 3 ? value.split('').map((char) => char + char).join('') : value
@@ -76,6 +93,8 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
   const [selectedStationId, setSelectedStationId] = useState(controlledSelectedStationId || DEFAULT_STATIONS[0].station_id)
   const [worldPolygons, setWorldPolygons] = useState([])
   const [pulseTick, setPulseTick] = useState(0)
+  const [cameraAltitude, setCameraAltitude] = useState(1.8)
+  const [isRotating, setIsRotating] = useState(true)
 
   useEffect(() => {
     let active = true
@@ -131,12 +150,27 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
   useEffect(() => {
     if (!globeRef.current) return
     const globe = globeRef.current
-    globe.controls().autoRotate = true
     globe.controls().autoRotateSpeed = 0.6
     globe.controls().enablePan = false
     globe.controls().enableZoom = true
     globe.pointOfView({ lat: 20, lng: 78, altitude: 1.8 }, 0)
+
+    const handleCameraChange = () => {
+      const pointOfView = globe.pointOfView()
+      if (pointOfView?.altitude != null) setCameraAltitude(pointOfView.altitude)
+    }
+
+    const controls = globe.controls()
+    controls.addEventListener('change', handleCameraChange)
+    handleCameraChange()
+
+    return () => controls.removeEventListener('change', handleCameraChange)
   }, [])
+
+  useEffect(() => {
+    if (!globeRef.current) return
+    globeRef.current.controls().autoRotate = isRotating
+  }, [isRotating])
 
   useEffect(() => {
     if (controlledSelectedStationId) {
@@ -153,6 +187,8 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
     () => stations.find((station) => station.station_id === selectedStationId) ?? stations[0] ?? DEFAULT_STATIONS[0],
     [selectedStationId, stations]
   )
+
+  const visibilityTier = getGlobeVisibilityTier(cameraAltitude)
 
   const stationPoints = useMemo(
     () =>
@@ -171,18 +207,8 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
   )
 
   const labelPoints = useMemo(
-    () => [
-      ...WORLD_LABELS,
-      ...stations
-        .filter((station) => station.latitude != null && station.longitude != null)
-        .map((station) => ({
-          label: station.city,
-          lat: station.latitude,
-          lng: station.longitude,
-          color: '#ffb020',
-        })),
-    ],
-    [stations]
+    () => WORLD_LABELS,
+    []
   )
 
   const selectedHaloPoints = useMemo(() => {
@@ -205,13 +231,45 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
 
   const htmlPins = useMemo(
     () =>
-      stations.map((station) => ({
-        ...station,
-        lat: station.latitude,
-        lng: station.longitude,
-        color: station.color || (station.health === 'anomaly' ? '#ff4d5e' : station.health === 'degraded' ? '#ffb020' : '#16e0b4'),
-      })),
-    [stations]
+      stations
+        .map((station) => ({
+          ...station,
+          lat: station.latitude,
+          lng: station.longitude,
+          color: station.color || (station.health === 'anomaly' ? '#ff4d5e' : station.health === 'degraded' ? '#ffb020' : '#16e0b4'),
+          isSelected: station.station_id === selectedStationId,
+          visible: visibilityTier === 'local' || station.station_id === selectedStationId || (visibilityTier === 'regional' && getStationLabelLayout(station.station_id).priority >= 3),
+        }))
+        .filter((station) => station.visible),
+    [selectedStationId, stations, visibilityTier]
+  )
+
+  const htmlLabels = useMemo(
+    () =>
+      stations
+        .filter((station) => station.latitude != null && station.longitude != null)
+        .map((station) => {
+          const layout = getStationLabelLayout(station.station_id)
+          const isSelected = station.station_id === selectedStationId
+          return {
+            ...station,
+            kind: 'label',
+            lat: station.latitude + layout.latOffset,
+            lng: station.longitude + layout.lngOffset,
+            isSelected,
+            visible: visibilityTier === 'local' || isSelected || (visibilityTier === 'regional' && layout.priority >= 3),
+          }
+        })
+        .filter((station) => station.visible),
+    [selectedStationId, stations, visibilityTier]
+  )
+
+  const htmlOverlayData = useMemo(
+    () => [
+      ...htmlPins.map((station) => ({ ...station, kind: 'pin' })),
+      ...htmlLabels,
+    ],
+    [htmlLabels, htmlPins]
   )
 
   return (
@@ -274,7 +332,19 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
         <div className="hero-globe-heading">
           <div>
             <span className="hero-live-label mono">India AWS network</span>
-            <h2>Every station, one click away</h2>
+            <div className="hero-globe-title-row">
+              <h2>Every station, one click away</h2>
+              <button
+                type="button"
+                className={`globe-rotation-toggle ${isRotating ? 'globe-rotation-toggle--active' : ''}`}
+                aria-pressed={isRotating}
+                aria-label={`${isRotating ? 'Pause' : 'Resume'} globe auto-rotation`}
+                onClick={() => setIsRotating((current) => !current)}
+              >
+                <span className="globe-rotation-icon" aria-hidden="true">{isRotating ? '↻' : 'Ⅱ'}</span>
+                <span>Auto-Rotate: {isRotating ? 'ON' : 'OFF'}</span>
+              </button>
+            </div>
           </div>
           <span className="mono">Click a marker to select a live feed</span>
         </div>
@@ -307,21 +377,35 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
             pointRadius={(d) => (d.isHalo ? 0.9 : d.station_id === selectedStationId ? 1.7 : 1.3)}
             pointResolution={32}
             pointMerge={false}
-            htmlElementsData={htmlPins}
+            htmlElementsData={htmlOverlayData}
             htmlLat={(d) => d.lat}
             htmlLng={(d) => d.lng}
-            htmlAltitude={(d) => (d.station_id === selectedStationId ? 0.12 : 0.08)}
+            htmlAltitude={(d) => (d.kind === 'label' ? 0.1 : d.station_id === selectedStationId ? 0.12 : 0.08)}
             htmlElement={(d) => {
+              if (d.kind === 'label') {
+                const label = document.createElement('button')
+                label.type = 'button'
+                label.className = `station-label-billboard ${d.isSelected ? 'station-label-billboard--selected' : ''}`
+                label.textContent = d.city
+                label.title = `Select ${d.name}`
+                label.addEventListener('click', () => {
+                  setSelectedStationId(d.station_id)
+                  if (onStationSelect) onStationSelect(d.station_id)
+                  else if (onExplore) onExplore()
+                })
+                return label
+              }
+
               const el = document.createElement('button')
               el.type = 'button'
-              el.className = `station-pin ${selectedStationId === d.station_id ? 'station-pin--selected' : ''}`
+              el.className = `station-pin ${d.isSelected ? 'station-pin--selected' : ''}`
               el.title = `${d.name} (${d.station_id})`
               el.style.transform = 'translate(-50%, -100%)'
-              el.style.zIndex = selectedStationId === d.station_id ? '20' : '10'
+              el.style.zIndex = d.isSelected ? '20' : '10'
               el.innerHTML = `
                 <svg viewBox="0 0 120 120" width="100%" height="100%" aria-hidden="true" focusable="false">
-                  <path d="M60 10c-24.9 0-45 20.1-45 45 0 31.4 36 57 43.2 63.1a4.7 4.7 0 0 0 3.6 0C69 112 105 86.4 105 55 105 30.1 84.9 10 60 10Z" fill="${d.color || '#16e0b4'}" stroke="${selectedStationId === d.station_id ? '#f8fbff' : '#000000'}" stroke-width="7" stroke-linejoin="round"/>
-                  <circle cx="60" cy="55" r="${selectedStationId === d.station_id ? 18 : 15}" fill="#0b0f17" stroke="${selectedStationId === d.station_id ? '#f8fbff' : '#000000'}" stroke-width="6"/>
+                  <path d="M60 10c-24.9 0-45 20.1-45 45 0 31.4 36 57 43.2 63.1a4.7 4.7 0 0 0 3.6 0C69 112 105 86.4 105 55 105 30.1 84.9 10 60 10Z" fill="${d.color || '#16e0b4'}" stroke="${d.isSelected ? '#f8fbff' : '#000000'}" stroke-width="7" stroke-linejoin="round"/>
+                  <circle cx="60" cy="55" r="${d.isSelected ? 18 : 15}" fill="#0b0f17" stroke="${d.isSelected ? '#f8fbff' : '#000000'}" stroke-width="6"/>
                 </svg>
               `
               el.addEventListener('click', () => {
