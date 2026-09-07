@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
 } from 'recharts'
@@ -6,9 +6,7 @@ import './Dashboard.css'
 import AlertCenter from './AlertCenter'
 import SensorBadge from './SensorBadge'
 import ExplainPanel from './ExplainPanel'
-import { DEFAULT_STATIONS, fetchStations } from '../data/stations'
-
-const API_BASE = 'http://127.0.0.1:8000'
+import { DEFAULT_STATIONS, fetchStationStatus, fetchStations } from '../data/stations'
 
 const METRIC_DOMAIN = {
   temperature_c: { pad: 2, min: undefined, max: undefined },
@@ -76,6 +74,7 @@ export default function Dashboard({ selectedStationId, onSelectStation }) {
   const [stations, setStations] = useState(DEFAULT_STATIONS)
   const [selectedId, setSelectedId] = useState(selectedStationId || DEFAULT_STATIONS[0]?.station_id || null)
   const [statuses, setStatuses] = useState({})
+  const seriesHistory = useRef({})
 
   useEffect(() => {
     let active = true
@@ -128,9 +127,8 @@ export default function Dashboard({ selectedStationId, onSelectStation }) {
 
         const entries = await Promise.all(
           stationList.map(async (station) => {
-            const previousSeries = statuses[station.station_id]?.series || []
-            const response = await fetch(`${API_BASE}/stations/${station.station_id}/status`)
-            const statusData = response.ok ? await response.json() : null
+            const previousSeries = seriesHistory.current[station.station_id] || []
+            const statusData = await fetchStationStatus(station.station_id)
 
             const timestamp = statusData?.timestamp ? new Date(statusData.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : ''
             const latestReading = statusData?.readings || {}
@@ -141,7 +139,11 @@ export default function Dashboard({ selectedStationId, onSelectStation }) {
               humidity_pct: latestReading.humidity_pct,
             }
 
-            const series = [...previousSeries, newPoint].filter((point) => point.time || point.temperature_c !== undefined || point.pressure_hpa !== undefined || point.humidity_pct !== undefined).slice(-30)
+            const series = (previousSeries.length
+              ? [...previousSeries, newPoint]
+              : statusData.series || [newPoint]
+            ).filter((point) => point.time || point.temperature_c !== undefined || point.pressure_hpa !== undefined || point.humidity_pct !== undefined).slice(-30)
+            seriesHistory.current[station.station_id] = series
 
             return [
               station.station_id,

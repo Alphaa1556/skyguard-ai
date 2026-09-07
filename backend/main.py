@@ -12,7 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from features import StationFeatureBuilder
-import lstm_drift_detector
+
+try:
+    import lstm_drift_detector
+except (ImportError, OSError):
+    lstm_drift_detector = None
 
 app = FastAPI(title="SkyGuard AI", description="Anomaly detection API for Automatic Weather Stations")
 
@@ -276,7 +280,7 @@ _lstm_model = None
 _lstm_scaler_stats = None
 _lstm_threshold = None
 
-if os.path.exists(LSTM_WEIGHTS_PATH) and os.path.exists(LSTM_CONFIG_PATH):
+if lstm_drift_detector and os.path.exists(LSTM_WEIGHTS_PATH) and os.path.exists(LSTM_CONFIG_PATH):
     _lstm_model, _lstm_scaler_stats, _lstm_threshold = lstm_drift_detector.load_artifacts(
         LSTM_WEIGHTS_PATH, LSTM_CONFIG_PATH
     )
@@ -286,11 +290,11 @@ else:
           f"signal. Run train_and_evaluate.py to generate it (drift recall will stay "
           f"low without it — see features.py's v4 fix note).")
 
-_drift_detectors: dict[str, lstm_drift_detector.DriftDetector] = {}
+_drift_detectors = {}
 
 
-def _get_drift_detector(station_id: str) -> Optional[lstm_drift_detector.DriftDetector]:
-    if _lstm_model is None:
+def _get_drift_detector(station_id: str):
+    if lstm_drift_detector is None or _lstm_model is None:
         return None
     if station_id not in _drift_detectors:
         _drift_detectors[station_id] = lstm_drift_detector.DriftDetector(

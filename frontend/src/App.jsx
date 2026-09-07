@@ -22,6 +22,12 @@ export default function App() {
     return () => { document.body.style.overflow = '' }
   }, [introActive])
 
+  // Always start a fresh visit at the hero view shown on the landing screen.
+  useEffect(() => {
+    window.history.scrollRestoration = 'manual'
+    window.scrollTo(0, 0)
+  }, [])
+
   const scrollToDashboard = () => {
     dashboardRef.current?.scrollIntoView({ behavior: 'smooth' })
   }
