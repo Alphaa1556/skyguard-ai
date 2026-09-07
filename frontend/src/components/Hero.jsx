@@ -303,8 +303,8 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
         </div>
 
         <h1 className="hero-title">
-          Existing systems ask<br />
-          <em>if</em> it&rsquo;s unusual.<br />
+          Existing systems<br />
+          ask <em>if</em> it&rsquo;s unusual.<br />
           <span className="hero-title-accent">We ask why.</span>
         </h1>
 

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import Hero from './components/Hero'
 import Dashboard from './components/Dashboard'
 import SatelliteIntro from './components/SatelliteIntro'
+import HistoricalExplorer from './components/HistoricalExplorer'
 import './App.css'
 
 export default function App() {
@@ -45,6 +46,7 @@ export default function App() {
       <div ref={dashboardRef}>
         <Dashboard selectedStationId={selectedStationId} onSelectStation={setSelectedStationId} />
       </div>
+      <HistoricalExplorer />
       <footer className="site-footer mono">
         Built for Ministry of Earth Sciences (MoES) · India Meteorological Department — disaster management
       </footer>
