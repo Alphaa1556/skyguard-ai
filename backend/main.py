@@ -7,11 +7,12 @@ from typing import List, Optional
 
 import joblib
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from features import StationFeatureBuilder
+from websocket_manager import manager
 
 try:
     import lstm_drift_detector
@@ -401,9 +402,19 @@ def _detect_anomaly(station_id: str, readings: Readings) -> AnomalyResult:
 def root():
     return {"service": "SkyGuard AI", "status": "ok"}
 
+@app.websocket("/ws")
+async def ws_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
+
 
 @app.post("/ingest", response_model=StationStatus)
-def ingest(payload: IngestPayload):
+async def ingest(payload: IngestPayload):
     """Receive a reading, run it through the anomaly detector, store + return the result."""
     anomaly = _detect_anomaly(payload.station_id, payload.readings)
 
@@ -416,8 +427,8 @@ def ingest(payload: IngestPayload):
     )
     _stations[payload.station_id] = result
     _locations[payload.station_id] = payload.location
+    await manager.broadcast(result.model_dump(mode="json"))
     return result
-
 
 @app.get("/stations", response_model=List[StationSummary])
 def list_stations():
