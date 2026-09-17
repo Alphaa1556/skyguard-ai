@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import Globe from 'react-globe.gl'
 import './Hero.css'
 import { DEFAULT_STATIONS, fetchStations } from '../data/stations'
+import useStationSocket from '../hooks/useStationSocket'
 
 const WORLD_LABELS = [
   { label: 'North America', lat: 39, lng: -98 },
@@ -76,6 +77,7 @@ function buildWavePath(spike) {
 
 export default function Hero({ onExplore, onStationSelect, selectedStationId: controlledSelectedStationId }) {
   const globeRef = useRef(null)
+  const { latestData, connectionState } = useStationSocket()
   const [phase, setPhase] = useState('calm')
   const [path, setPath] = useState(buildWavePath(false))
   const [stations, setStations] = useState(DEFAULT_STATIONS)
@@ -102,6 +104,21 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
       active = false
     }
   }, [])
+
+  useEffect(() => {
+    if (!latestData?.station_id) return
+
+    const liveHealth = latestData.anomaly?.is_anomaly
+      ? latestData.anomaly.type === 'cross_sensor' ? 'anomaly' : 'degraded'
+      : 'normal'
+    const liveColor = liveHealth === 'anomaly' ? '#ff4d5e' : liveHealth === 'degraded' ? '#ffb020' : '#16e0b4'
+
+    setStations((current) => current.map((station) => (
+      station.station_id === latestData.station_id
+        ? { ...station, ...latestData, health: liveHealth, color: liveColor }
+        : station
+    )))
+  }, [latestData])
 
   useEffect(() => {
     let active = true
@@ -202,6 +219,7 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
   )
 
   const waveStatus = (waveStation.health || 'normal').toLowerCase()
+  const socketIsLive = connectionState === 'open'
 
   const radarStations = useMemo(
     () =>
@@ -382,7 +400,13 @@ export default function Hero({ onExplore, onStationSelect, selectedStationId: co
       <div className="hero-globe-section">
         <div className="hero-globe-heading">
           <div>
-            <span className="hero-live-label mono">India AWS network</span>
+            <div className="hero-globe-meta">
+              <span className="hero-live-label mono">India AWS network</span>
+              <span className={`socket-status socket-status--${socketIsLive ? 'live' : 'disconnected'}`} role="status" aria-live="polite">
+                <span className="socket-status-dot" aria-hidden="true" />
+                {socketIsLive ? 'Live' : 'Disconnected'}
+              </span>
+            </div>
             <div className="hero-globe-title-row">
               <h2>Every station, one click away</h2>
               <button

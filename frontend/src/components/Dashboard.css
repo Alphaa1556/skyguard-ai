@@ -235,8 +235,36 @@
 .alert-center-title {
   font-family: var(--font-display);
   font-size: 1rem;
-  margin: 0 0 14px;
+  margin: 0;
 }
+
+.alert-center-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.socket-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.04em;
+}
+
+.socket-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.socket-status--live { color: var(--teal); }
+.socket-status--disconnected { color: var(--red); }
 
 .alert-empty { color: var(--text-faint); font-size: 0.85rem; }
 
