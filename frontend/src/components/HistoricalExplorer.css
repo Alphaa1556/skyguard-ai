@@ -15,6 +15,10 @@
 
 .explorer-conn-warning { color: var(--amber); }
 
+.explorer-live-tag {
+  color: var(--teal);
+}
+
 .explorer-clear-btn {
   background: transparent;
   border: 1px solid var(--border-strong);
