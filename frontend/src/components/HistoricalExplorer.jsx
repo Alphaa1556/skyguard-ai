@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { fetchStations, fetchStationStatus } from '../data/stations'
 import { loadLog, appendEntries, clearLog } from '../data/historicalLog'
+import useStationSocket from '../hooks/useStationSocket'
 import './HistoricalExplorer.css'
 
 const POLL_INTERVAL_MS = 8000
@@ -23,6 +24,21 @@ function formatTime(ts) {
   }
 }
 
+// Builds one log-entry object from a station status payload, whether it
+// arrived via the REST poll or Ronak's WebSocket push — same shape either way.
+function toLogEntry(status) {
+  return {
+    id: `${status.station_id}__${status.timestamp}`,
+    station_id: status.station_id,
+    station_name: status.name || status.station_id,
+    timestamp: status.timestamp,
+    type: status.anomaly.type,
+    confidence: status.anomaly.confidence,
+    affected_parameter: status.anomaly.affected_parameter,
+    explanation: status.anomaly.explanation,
+  }
+}
+
 export default function HistoricalExplorer() {
   const [log, setLog] = useState(() => loadLog())
   const [stationFilter, setStationFilter] = useState('all')
@@ -32,11 +48,14 @@ export default function HistoricalExplorer() {
   const [sortDir, setSortDir] = useState('desc') // 'desc' = newest first
   const [connectionOk, setConnectionOk] = useState(true)
 
-  // Poll every station's status on an interval and log any anomaly seen.
-  // Reuses the team's fetchStations()/fetchStationStatus() from data/stations.js,
-  // which already handles the real backend URL and falls back gracefully
-  // (with is_anomaly: false) if the backend is briefly unreachable — so this
-  // never logs a false anomaly purely from a dropped connection.
+  // WebSocket: Pratik's hook, wired to Ronak's backend push. Delivers one
+  // most-recently-changed station at a time, the instant it changes —
+  // this is how anomalies land in the log immediately instead of waiting
+  // for the next 8s poll below.
+  const { latestData, connectionState } = useStationSocket()
+
+  // REST poll: kept as the initial-load source and fallback, since the
+  // socket only ever gives the single latest change, not a full snapshot.
   useEffect(() => {
     let cancelled = false
     let stationsCache = []
@@ -67,16 +86,7 @@ export default function HistoricalExplorer() {
         if (r.status !== 'fulfilled') return
         const status = r.value
         if (!status?.anomaly?.is_anomaly) return
-        newEntries.push({
-          id: `${status.station_id}__${status.timestamp}`,
-          station_id: status.station_id,
-          station_name: status.name || status.station_id,
-          timestamp: status.timestamp,
-          type: status.anomaly.type,
-          confidence: status.anomaly.confidence,
-          affected_parameter: status.anomaly.affected_parameter,
-          explanation: status.anomaly.explanation,
-        })
+        newEntries.push(toLogEntry(status))
       })
 
       if (newEntries.length) {
@@ -88,6 +98,13 @@ export default function HistoricalExplorer() {
     const interval = setInterval(poll, POLL_INTERVAL_MS)
     return () => { cancelled = true; clearInterval(interval) }
   }, [])
+
+  // Live path: log an anomaly the moment the WebSocket pushes one, without
+  // waiting for the next poll cycle above.
+  useEffect(() => {
+    if (!latestData?.anomaly?.is_anomaly) return
+    setLog(prev => appendEntries(prev, [toLogEntry(latestData)]))
+  }, [latestData])
 
   const stationOptions = useMemo(() => {
     const ids = new Set(log.map(e => e.station_id))
@@ -128,6 +145,9 @@ export default function HistoricalExplorer() {
           <p className="section-sub">
             {log.length} anomal{log.length === 1 ? 'y' : 'ies'} logged since this page started watching
             {!connectionOk && <span className="explorer-conn-warning mono"> · backend unreachable, log paused</span>}
+            {connectionOk && connectionState === 'open' && (
+              <span className="explorer-live-tag mono"> · live via websocket</span>
+            )}
           </p>
         </div>
         <button className="explorer-clear-btn mono" onClick={handleClear} disabled={!log.length}>
